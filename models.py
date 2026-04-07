@@ -8,7 +8,7 @@ class Tent(Base):
     name = Column(Text, nullable=False)
     brand = Column(Text)
     price = Column(Integer)
-    capacity = Column(Integer)
+    capacity = Column(Numeric)
     weight_kg = Column(Numeric)
     size_w = Column(Numeric)
     size_d = Column(Numeric)
