@@ -355,10 +355,24 @@ button:disabled {
 
 /* Changed Cell Highlighting */
 .modified {
-  color: #ff4d4d !important;
+  color: #ffb946 !important;
   font-weight: 700 !important;
-  background: rgba(255, 77, 77, 0.05) !important;
+  background: rgba(255, 185, 70, 0.05) !important;
 }
+
+/* Deletion and Addition Proposals */
+.pending-delete td {
+  text-decoration: line-through;
+  color: #94a3b8 !important;
+  background: rgba(239, 68, 68, 0.1) !important;
+  opacity: 0.6;
+}
+
+.pending-add td {
+  background: rgba(16, 185, 129, 0.1) !important;
+  border-left: 4px solid #10b981;
+}
+
 /* Toast Notifications */
 #toast-container {
   position: fixed;

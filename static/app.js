@@ -1,10 +1,8 @@
 const API_BASE = window.location.origin;
 
-// Session and History management
-let sessionId = localStorage.getItem('chat_session_id') || Math.random().toString(36).substring(7);
-localStorage.setItem('chat_session_id', sessionId);
-
-let messageHistory = JSON.parse(localStorage.getItem('chat_history') || '[]');
+// Session and History management disabled
+let sessionId = Math.random().toString(36).substring(7);
+let messageHistory = [];
 
 // Configure marked
 marked.setOptions({
@@ -55,7 +53,19 @@ function handleSort(key) {
 window.handleSort = handleSort;
 
 function applySort() {
-    const sorted = [...currentTents].sort((a, b) => {
+    // Merge currentTents and new items from pendingEdits for sorting/rendering
+    const allIds = new Set([
+        ...currentTents.map(t => t.id),
+        ...Object.keys(pendingEdits).map(k => parseInt(k))
+    ]);
+
+    const displayList = [...allIds].map(id => {
+        const original = currentTents.find(t => t.id === id) || {};
+        const edits = pendingEdits[id] || {};
+        return { ...original, ...edits, id: id };
+    });
+
+    const sorted = displayList.sort((a, b) => {
         let valA = a[sortConfig.key];
         let valB = b[sortConfig.key];
 
@@ -65,11 +75,8 @@ function applySort() {
             return sortConfig.direction === 'asc' ? valA - valB : valB - valA;
         }
 
-        if (valA === null || valA === undefined) valA = '';
-        if (valB === null || valB === undefined) valB = '';
-        valA = String(valA);
-        valB = String(valB);
-
+        valA = String(valA || '');
+        valB = String(valB || '');
         if (valA < valB) return sortConfig.direction === 'asc' ? -1 : 1;
         if (valA > valB) return sortConfig.direction === 'asc' ? 1 : -1;
         return 0;
@@ -77,7 +84,7 @@ function applySort() {
     renderTable(sorted);
 }
 
-function renderTable(tents) {
+function renderTable(displayList) {
     const headers = {
         'id': 'col-id', 'name': 'col-name', 'brand': 'col-brand',
         'price': 'col-price', 'capacity': 'col-capacity',
@@ -106,16 +113,24 @@ function renderTable(tents) {
     if (!tbody) return;
     tbody.innerHTML = '';
 
-    tents.forEach(tent => {
-        const id = tent.id;
-        const tr = document.createElement('tr');
+    displayList.forEach(item => {
+        const id = item.id;
+        const isNew = item._isNew || id < 0;
+        const isDeleted = pendingEdits[id] && pendingEdits[id]._deleted;
 
-        const getVal = (field) => (pendingEdits[id] && pendingEdits[id].hasOwnProperty(field)) ? pendingEdits[id][field] : tent[field];
+        const tr = document.createElement('tr');
+        if (isDeleted) tr.classList.add('pending-delete');
+        if (isNew) tr.classList.add('pending-add');
+
+        const tent = currentTents.find(t => t.id === id) || {};
+
+        // Check if field is actually modified from original
         const isMod = (field) => (pendingEdits[id] && pendingEdits[id].hasOwnProperty(field)) ? 'modified' : '';
+        const getVal = (field) => (pendingEdits[id] && pendingEdits[id].hasOwnProperty(field)) ? pendingEdits[id][field] : tent[field];
 
         tr.innerHTML = `
-            <td>${id}</td>
-            <td contenteditable="true" class="editable ${isMod('name')}" onblur="updateField(${id}, 'name', this.innerText, this)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">${getVal('name')}</td>
+            <td>${isNew ? 'NEW' : id}</td>
+            <td contenteditable="true" class="editable ${isMod('name')}" onblur="updateField(${id}, 'name', this.innerText, this)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">${getVal('name') || ''}</td>
             <td contenteditable="true" class="editable ${isMod('brand')}" onblur="updateField(${id}, 'brand', this.innerText, this)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">${getVal('brand') || ''}</td>
             <td contenteditable="true" class="editable ${isMod('price')}" onblur="updateField(${id}, 'price', this.innerText, this)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">${(getVal('price') || 0).toLocaleString()}</td>
             <td contenteditable="true" class="editable ${isMod('capacity')}" onblur="updateField(${id}, 'capacity', this.innerText, this)" onkeydown="if(event.key==='Enter'){event.preventDefault();this.blur();}">${(parseFloat(getVal('capacity')) || 0).toFixed(1)}</td>
@@ -132,6 +147,8 @@ function renderTable(tents) {
         tbody.appendChild(tr);
     });
 }
+
+
 
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
@@ -180,6 +197,18 @@ function updateField(id, field, value, element) {
     let finalValue = value.trim();
     let originalValue = tent[field];
 
+    // If both are empty/null/undefined, they are effectively the same
+    const isEmpty = (v) => v === null || v === undefined || v === "";
+    if (isEmpty(finalValue) && isEmpty(originalValue)) {
+        if (pendingEdits[id]) {
+            delete pendingEdits[id][field];
+            if (Object.keys(pendingEdits[id]).length === 0) delete pendingEdits[id];
+        }
+        if (element) element.classList.remove('modified');
+        updateStatus();
+        return;
+    }
+
     if (numericFields.includes(field)) {
         const numericStr = finalValue.replace(/,/g, '');
         const numValue = parseFloat(numericStr);
@@ -226,10 +255,14 @@ async function validateEdits() {
             count++;
             // 型および数値チェック
             if (numericFields.includes(field)) {
-                if (typeof value !== 'number' || isNaN(value)) {
-                    errors.push(`ID ${id}: ${field} は数値である必要があります。`);
+                if (value !== "" && value !== null && value !== undefined) {
+                    const num = parseFloat(value);
+                    if (isNaN(num)) {
+                        errors.push(`ID ${id}: ${field} は数値である必要があります。`);
+                    }
                 }
             }
+
             // 必須チェック
             if (field === 'name' && (!value || !String(value).trim())) {
                 errors.push(`ID ${id}: 名前を空にできません。`);
@@ -282,9 +315,11 @@ async function commitEdits() {
             updateStatus();
             showToast(`保存完了: ${result.updated_count}件を更新しました。`, 'success');
         } else {
-            const errBody = await res.text();
-            showToast('書き込み失敗: ' + errBody, 'error');
+            const errData = await res.json().catch(() => null);
+            const errMsg = errData && errData.detail ? JSON.stringify(errData.detail) : await res.text();
+            showToast('書き込み失敗: ' + errMsg, 'error');
         }
+
     } catch (e) {
         showToast('ネットワークエラーが発生しました。', 'error');
     }
@@ -312,10 +347,13 @@ window.resetEdits = resetEdits;
 function parseUIProposals(text) {
     const proposalRegex = /\[UI_PROPOSAL:\s*({[\s\S]*?})\]/g;
     const bulkProposalRegex = /\[UI_BULK_PROPOSAL:\s*({[\s\S]*?})\]/g;
+    const addProposalRegex = /\[UI_ADD_PROPOSAL:\s*({[\s\S]*?})\]/g;
+    const deleteProposalRegex = /\[UI_DELETE_PROPOSAL:\s*({[\s\S]*?})\]/g;
+
     let match;
     let hasChanges = false;
 
-    // Handle single proposals
+    // Handle single proposals (Update)
     while ((match = proposalRegex.exec(text)) !== null) {
         try {
             const data = JSON.parse(match[1]);
@@ -328,7 +366,7 @@ function parseUIProposals(text) {
         } catch (e) { console.error('Failed to parse proposal:', e); }
     }
 
-    // Handle bulk proposals
+    // Handle bulk proposals (Update)
     while ((match = bulkProposalRegex.exec(text)) !== null) {
         try {
             const data = JSON.parse(match[1]);
@@ -343,11 +381,37 @@ function parseUIProposals(text) {
         } catch (e) { console.error('Failed to parse bulk proposal:', e); }
     }
 
+    // Handle Add proposals
+    while ((match = addProposalRegex.exec(text)) !== null) {
+        try {
+            const data = JSON.parse(match[1]);
+            // Generate a unique negative ID for the new row
+            const newId = (Math.min(0, ...Object.keys(pendingEdits).map(k => parseInt(k))) - 1);
+            pendingEdits[newId] = { ...data, _isNew: true };
+            if (pendingEdits[newId].id) delete pendingEdits[newId].id; // Use newId as key
+            hasChanges = true;
+        } catch (e) { console.error('Failed to parse add proposal:', e); }
+    }
+
+    // Handle Delete proposals
+    while ((match = deleteProposalRegex.exec(text)) !== null) {
+        try {
+            const data = JSON.parse(match[1]);
+            const id = parseInt(data.id);
+            if (!isNaN(id)) {
+                if (!pendingEdits[id]) pendingEdits[id] = {};
+                pendingEdits[id]._deleted = true;
+                hasChanges = true;
+            }
+        } catch (e) { console.error('Failed to parse delete proposal:', e); }
+    }
+
     if (hasChanges) {
         applySort();
         updateStatus();
     }
 }
+
 
 async function sendMessage() {
     const input = document.getElementById('chat-input');
@@ -373,20 +437,24 @@ async function sendMessage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: msg, session_id: sessionId })
         });
-        const data = await res.json();
-        typingDiv.remove();
+        if (!res.ok) {
+            const errData = await res.json();
+            appendMessage('ai', `サーバーエラーが発生しました: ${errData.detail || '不明なエラー'}`);
+        } else {
+            const data = await res.json();
+            // Process UI proposals from AI response
+            parseUIProposals(data.response);
 
-        // Process UI proposals from AI response
-        parseUIProposals(data.response);
-
-        // Clean up response text (remove tags from display)
-        const cleanResponse = data.response.replace(/\[UI_PROPOSAL:[\s\S]*?\]/g, '').replace(/\[UI_BULK_PROPOSAL:[\s\S]*?\]/g, '').trim();
-        appendMessage('ai', cleanResponse || 'ご提案を反映しました。');
-
+            // Clean up response text (remove tags from display)
+            const cleanResponse = data.response.replace(/\[UI_PROPOSAL:[\s\S]*?\]/g, '').replace(/\[UI_BULK_PROPOSAL:[\s\S]*?\]/g, '').trim();
+            appendMessage('ai', cleanResponse || 'ご提案を反映しました。');
+        }
     } catch (e) {
         typingDiv.remove();
-        appendMessage('ai', 'エラーが発生しました。再度お試しください。');
+        console.error('Chat Error:', e);
+        appendMessage('ai', `通信エラーが発生しました: ${e.message}`);
     } finally {
+
         btn.disabled = false;
     }
 }
@@ -426,7 +494,6 @@ function appendMessage(sender, text) {
     }
     container.scrollTop = container.scrollHeight;
     messageHistory.push({ sender, text });
-    localStorage.setItem('chat_history', JSON.stringify(messageHistory));
 }
 
 function loadHistory() {
@@ -452,4 +519,4 @@ document.getElementById('chat-input').addEventListener('keypress', (e) => {
 
 fetchTents();
 fetchStats();
-loadHistory();
+// loadHistory(); 履歴機能は削除されました

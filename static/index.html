@@ -47,7 +47,7 @@
               <th id="col-pack_d" onclick="handleSort('pack_d')">PackD</th>
               <th id="col-pack_h" onclick="handleSort('pack_h')">PackH</th>
               <th id="col-material" onclick="handleSort('material')">Material</th>
-              <th id="col-purchase_date" onclick="handleSort('purchase_date')">Date</th>
+              <th id="col-purchase_date" onclick="handleSort('purchase_date')">Purchase Date</th>
             </tr>
           </thead>
           <tbody>
@@ -69,6 +69,11 @@
     </section>
   </main>
   <div id="toast-container"></div>
-  <script src="app.js"></script>
+  <script>
+    // 危険な一括削除を取りやめ、当アプリ固有のチャットデータのみを安全にピンポイント削除
+    localStorage.removeItem('chat_history');
+    localStorage.removeItem('chat_session_id');
+  </script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

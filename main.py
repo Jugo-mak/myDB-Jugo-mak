@@ -97,59 +97,88 @@ def get_tent_stats():
 def update_tent_fields(tent_id: int, updates: Dict[str, Any]):
     """
     指定したIDのテントの情報を「画面上のみ」更新提案します。
-    更新可能なフィールド: name, brand, price, capacity, weight_kg, material, purchase_date, size_w, size_d, size_h, pack_w, pack_d, pack_h
-    注意: このツールはDBを書き換えません。画面上で赤字（未保存）にするだけです。
+    更新可能なフィールド: name, brand, price, capacity, weight_kg, material, purchase_date,
+    size_w, size_d, size_h, pack_w, pack_d, pack_h
+    
+    TIPS: Size/Packの情報を "210x130x105" のような形式で受け取った場合、自動的に W/D/H に分解します。
     """
     import json
-    proposal = {"id": tent_id, "updates": updates}
-    return f"[UI_PROPOSAL: {json.dumps(proposal)}]"
+    
+    # スマートパース機能: "size" や "pack" というキーで "WxDxH" 形式が来たら分解する
+    new_updates = dict(updates)
+    for composite_key in ['size', 'pack']:
+
+        if composite_key in new_updates and isinstance(new_updates[composite_key], str):
+            val = new_updates.pop(composite_key)
+            parts = val.replace('x', ' ').replace('*', ' ').split()
+            if len(parts) >= 3:
+                new_updates[f"{composite_key}_w"] = parts[0]
+                new_updates[f"{composite_key}_d"] = parts[1]
+                new_updates[f"{composite_key}_h"] = parts[2]
+
+    def decimal_default(obj):
+        from decimal import Decimal
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return str(obj)
+
+    proposal = {"id": tent_id, "updates": new_updates}
+    return f"[UI_PROPOSAL: {json.dumps(proposal, default=decimal_default)}]"
+
 
 def bulk_update_tents(tent_ids: List[int], updates: Dict[str, Any]):
     """
     複数のテントに対して、同一の変更を一括で「画面上のみ」更新提案します。
-    注意: このツールはDBを書き換えません。画面上で赤字（未保存）にするだけです。
+    TIPS: Size/Packの情報を "210x130x105" のような形式で受け取った場合、自動的に W/D/H に分解します。
     """
     import json
-    proposal = {"ids": tent_ids, "updates": updates}
-    return f"[UI_BULK_PROPOSAL: {json.dumps(proposal)}]"
+    
+    new_updates = dict(updates)
+    for composite_key in ['size', 'pack']:
+
+        if composite_key in new_updates and isinstance(new_updates[composite_key], str):
+            val = new_updates.pop(composite_key)
+            parts = val.replace('x', ' ').replace('*', ' ').split()
+            if len(parts) >= 3:
+                new_updates[f"{composite_key}_w"] = parts[0]
+                new_updates[f"{composite_key}_d"] = parts[1]
+                new_updates[f"{composite_key}_h"] = parts[2]
+
+    def decimal_default(obj):
+        from decimal import Decimal
+        if isinstance(obj, Decimal):
+            return float(obj)
+        return str(obj)
+
+    proposal = {"ids": tent_ids, "updates": new_updates}
+    return f"[UI_BULK_PROPOSAL: {json.dumps(proposal, default=decimal_default)}]"
+
 
 def delete_tent_by_id(tent_id: int):
     """
-    指定したIDのテントを削除します。
+    指定したIDのテントを「画面上のみ」削除提案します。
     """
-    print(f"[DEBUG] Tool: delete_tent_by_id(id={tent_id})")
-    db = next(get_db_session())
-    try:
-        db_tent = db.query(models.Tent).filter(models.Tent.id == tent_id).first()
-        if not db_tent:
-            return f"テントID {tent_id} は見つかりませんでした。"
-        name = db_tent.name
-        db.delete(db_tent)
-        db.commit()
-        return f"テント {name} (ID: {tent_id}) を削除しました。"
-    finally:
-        db.close()
+    import json
+    print(f"[DEBUG] Tool: delete_tent_by_id(id={tent_id}) proposal")
+    proposal = {"id": tent_id, "delete": True}
+    return f"[UI_DELETE_PROPOSAL: {json.dumps(proposal)}]"
 
 def add_tent(name: str, brand: str = None, price: float = None, capacity: float = None):
     """
-    新しいテントをデータベースに追加します。
+    新しいテントを「画面上のみ」追加提案します。
     """
-    print(f"[DEBUG] Tool: add_tent(name={name}, brand={brand}, price={price}, capacity={capacity})")
-    db = next(get_db_session())
-    try:
-        # Cast price to int if it's not None
-        p_val = int(price) if price is not None else None
-        new_tent = models.Tent(name=name, brand=brand, price=p_val, capacity=capacity)
-        db.add(new_tent)
-        db.commit()
-        db.refresh(new_tent)
-        return f"SUCCESS: 新しいテント {name} (ID: {new_tent.id}) を登録しました。"
-    except Exception as e:
-        db.rollback()
-        print(f"[ERROR] add_tent failed: {str(e)}")
-        return f"ERROR: 登録に失敗しました - {str(e)}"
-    finally:
-        db.close()
+    import json
+    new_data = {
+        "id": -1, # マーカー
+        "name": name,
+        "brand": brand,
+        "price": price,
+        "capacity": capacity
+    }
+    print(f"[DEBUG] Tool: add_tent(name={name}) proposal")
+    return f"[UI_ADD_PROPOSAL: {json.dumps(new_data)}]"
+
+
 
 # --- Notion API Tools via Direct HTTP (httpx) ---
 
@@ -160,10 +189,9 @@ BONNOU_TENT_PARENT_ID = "10c9fa68-e7ac-809a-8512-eca278b82750"
 def list_notion_tents() -> Any:
     """
     「煩悩テント」親ページの下にある子ページ（各テント）の一覧を取得します。
+    ページネーション（100件以上の取得）に対応。
     """
     token = (os.getenv("NOTION_TOKEN") or "").strip()
-    print(f"[DEBUG] Notion Sync: Fetching children of {BONNOU_TENT_PARENT_ID}")
-    
     if not token: return "ERROR: Notion token missing."
     
     headers = {
@@ -171,31 +199,45 @@ def list_notion_tents() -> Any:
         "Notion-Version": NOTION_API_VERSION
     }
     
+    output = []
+    has_more = True
+    start_cursor = None
+    
+    print(f"[DEBUG] Notion Sync: Fetching all children of {BONNOU_TENT_PARENT_ID}")
+    
     try:
         with httpx.Client() as client:
-            url = f"https://api.notion.com/v1/blocks/{BONNOU_TENT_PARENT_ID}/children"
-            response = client.get(url, headers=headers)
-            
-            if response.status_code != 200:
-                return f"ERROR: API {response.status_code} - {response.text}"
+            while has_more:
+                url = f"https://api.notion.com/v1/blocks/{BONNOU_TENT_PARENT_ID}/children"
+                params = {}
+                if start_cursor:
+                    params["start_cursor"] = start_cursor
                 
-            data = response.json()
-            results = data.get("results", [])
-            
-            # Filter only child_page types
-            output = []
-            for b in results:
-                if b["type"] == "child_page":
-                    output.append({
-                        "page_id": b["id"],
-                        "name": b["child_page"].get("title", "Untitled Page")
-                    })
-            
-            print(f"[DEBUG] Notion Sync: Found {len(output)} tent pages.")
+                response = client.get(url, headers=headers, params=params)
+                if response.status_code != 200:
+                    return f"ERROR: API {response.status_code} - {response.text}"
+                    
+                data = response.json()
+                results = data.get("results", [])
+                
+                # Filter only child_page types and collect
+                for b in results:
+                    if b["type"] == "child_page":
+                        output.append({
+                            "page_id": b["id"],
+                            "name": b["child_page"].get("title", "Untitled Page")
+                        })
+                
+                has_more = data.get("has_more", False)
+                start_cursor = data.get("next_cursor")
+                print(f"[DEBUG] Notion Sync: Fetched {len(results)} items, cumulative output count: {len(output)}")
+                
+            print(f"[DEBUG] Notion Sync: Finished fetching all {len(output)} tent pages.")
             return output if output else "煩悩テントの下に子ページが見つかりませんでした。"
     except Exception as e:
         print(f"[ERROR] Notion Sync Exception: {str(e)}")
         return f"Error connecting to Notion: {str(e)}"
+
 
 def get_notion_tent_detail(page_id: str) -> Any:
     """
@@ -272,48 +314,161 @@ def add_notion_tent_to_db(page_id: str):
 
 # --- End Notion Tools ---
 
+def sync_all_from_notion(tent_ids: List[int]):
+    """
+    指定した全てのテントIDについて、Notionから情報を一括取得して画面に反映提案します。
+    内部で asyncio を使用して並列処理を行い、高速に同期します。
+    """
+    import json, re, asyncio
+    print(f"[DEBUG] Tool: sync_all_from_notion (PARALLEL BRIDGE) for {len(tent_ids)} items")
+    
+    notion_pages = list_notion_tents()
+    if isinstance(notion_pages, str): return notion_pages
+    
+    db = next(get_db_session())
+    final_proposals = ""
+    processed_count = 0
+    try:
+        tents_in_db = db.query(models.Tent).filter(models.Tent.id.in_(tent_ids)).all()
+        id_name_map = {t.id: t.name for t in tents_in_db}
+        
+        async def run_parallel_sync():
+            tasks = []
+            task_info = []
+            for tid in tent_ids:
+                name = id_name_map.get(tid)
+                if not name: continue
+                page = next((p for p in notion_pages if p['name'] == name), None)
+                if not page: continue
+                tasks.append(get_notion_tent_detail_async(page['id']))
+                task_info.append(tid)
+            
+            if not tasks: return []
+            return await asyncio.gather(*tasks), task_info
+
+        # Run the async loop inside the sync tool
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If running in FastAPI (which is async), we must use another way
+                import nest_asyncio
+                nest_asyncio.apply()
+                details, task_info = loop.run_until_complete(run_parallel_sync())
+            else:
+                details, task_info = loop.run_until_complete(run_parallel_sync())
+        except Exception as e:
+            # Fallback for complex loop environments
+            details, task_info = asyncio.run(run_parallel_sync())
+        
+        for tid, detail in zip(task_info, details):
+            if isinstance(detail, dict) and "unstructured_content" in detail:
+                text = detail["unstructured_content"]
+                updates = {}
+                # SOFTENED STRICT: Extract Purchase Date in various formats
+                d_m = re.search(r'(?:購入日|purchase\s*date)[\s:：]*(\d{4})[-/年\s](\d{1,2})[-/月\s](\d{1,2})', text, re.IGNORECASE)
+                if d_m:
+                    y, m, d = d_m.groups()
+                    raw_date = f"{y}-{int(m):02d}-{int(d):02d}"
+                    updates['purchase_date'] = raw_date
+
+                
+                if updates:
+                    final_proposals += f"[UI_PROPOSAL: {json.dumps({'id': tid, 'updates': updates})}]\n"
+                    processed_count += 1
+        
+        return f"合計 {processed_count} 件の Notion 購入情報を同期反映しました。\n{final_proposals}"
+    finally:
+        db.close()
+
+async def get_notion_tent_detail_async(page_id: str) -> Any:
+    # (Helper remained async as it's called within gather)
+    token = (os.getenv("NOTION_TOKEN") or "").strip()
+    headers = {"Authorization": f"Bearer {token}", "Notion-Version": NOTION_API_VERSION}
+    async with httpx.AsyncClient() as client:
+        url = f"https://api.notion.com/v1/blocks/{page_id}/children"
+        try:
+            response = await client.get(url, headers=headers)
+            if response.status_code != 200: return {}
+            data = response.json()
+            text_parts = []
+            for b in data.get("results", []):
+                btype = b["type"]
+                rich_text = b.get(btype, {}).get("rich_text", [])
+                text = "".join(t.get("plain_text", "") for t in rich_text)
+                if text: text_parts.append(text)
+            return {"page_id": page_id, "unstructured_content": "\n".join(text_parts)}
+        except: return {}
+
 # Initialize Gemini Model with Tools
 model = genai.GenerativeModel(
     model_name='models/gemini-3.1-flash-lite-preview',
     tools=[
         list_tents, search_tents, get_tent_by_id, get_tent_stats, 
         update_tent_fields, bulk_update_tents, delete_tent_by_id, add_tent,
-        list_notion_tents, get_notion_tent_detail, add_notion_tent_to_db
+        list_notion_tents, get_notion_tent_detail, add_notion_tent_to_db,
+        sync_all_from_notion
     ]
 )
 
-# In-memory chat storage
-chats: Dict[str, Any] = {}
 
+# チャットの履歴保存機能は完全に削除（常に初期状態から開始）
 @app.post("/api/chat")
 async def chat_with_agent(
     message: str = Body(..., embed=True),
     session_id: str = Body("default", embed=True)
 ):
+    system_message = (
+        "あなたはテントDB管理エージェントです。\n"
+        "【重要：絶対順守のルール】\n"
+        "- ユーザーから「〇〇だけ出して」「〇〇のみ更新して」と指示された場合、指定された項目（例：購入日だけ）以外は絶対に updates に含めないでください。他の情報（サイズや価格など）を勝手に推測して出力することは固く禁じます。\n"
+        "- 多数のデータを Notion から取得・反映する場合は必ず sync_all_from_notion ツールを使って一度に全件を処理してください。\n"
+        "- 手入力と同様に、まず画面上のセルの値を書き換え（提案）、ユーザーが確認・[書込]を行うまでDBには保存しません。"
+    )
+
     print(f"[DEBUG] Chat request from session {session_id}: {message}")
     try:
-        # Get or create chat session
-        if session_id not in chats:
-            print(f"[DEBUG] Creating new session: {session_id}")
-            chats[session_id] = model.start_chat(enable_automatic_function_calling=True)
+        # 履歴を一切持たない完全な新規セッション（ステートレス）を開始
+        chat = model.start_chat(
+            history=[
+                {"role": "user", "parts": [system_message]}, 
+                {"role": "model", "parts": ["了解しました。指示された項目のみに絞り、完璧に画面上への更新提案（[UI_PROPOSAL]）を行います。"]}
+            ],
+            enable_automatic_function_calling=True
+        )
         
-        chat = chats[session_id]
         response = chat.send_message(message)
         
-        # AI response rendering
-        return {"response": response.text}
+        # Collect response text
+        full_response_text = response.text
+        
+        # CRITICAL: Also collect tool execution results (the [UI_PROPOSAL] tags) 
+        # from the model's candidates to ensure they reach the frontend.
+        for part in response.candidates[0].content.parts:
+            if part.function_call:
+                # If there's a function call, the result will be in the next turn of history
+                pass
+        
+        # Instead of just response.text, we need to find the [UI_PROPOSAL] tag in the chat history
+        # which was generated by our tools.
+        history = chat.history
+        # Look ONLY at the very last function_response entry to avoid history bloat
+        if len(history) >= 2:
+            last_func_entry = history[-2]
+            if getattr(last_func_entry, 'role', '') != 'model':
+                for part in getattr(last_func_entry, 'parts', []):
+                    if hasattr(part, 'function_response') and part.function_response:
+                        val = part.function_response.response.get('result')
+                        if val and isinstance(val, str) and ('[UI_' in val):
+                            full_response_text += "\n" + val
+
+        return {"response": full_response_text}
+
     except Exception as e:
         err_msg = f"Chat interaction failed: {str(e)}"
         print(f"[ERROR] {err_msg}")
         traceback.print_exc()
         
-        # Reset session on error to allow recovery
-        if session_id in chats:
-            print(f"[DEBUG] Resetting session {session_id} due to error.")
-            del chats[session_id]
-            
-        # Return a meaningful error to the UI instead of a raw 500 if possible
-        # but here we still raise so the UI 'catch' block handles it locally
+        # エラーハンドリング（履歴機能は削除されたため、単純にエラーを返すのみ）
         raise HTTPException(status_code=500, detail=str(e))
 
 # Existing CRUD Endpoints

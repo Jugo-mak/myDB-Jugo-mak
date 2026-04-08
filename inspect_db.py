@@ -1,43 +1,38 @@
-import psycopg2
-from psycopg2 import sql
+import os
+from dotenv import load_dotenv
+from sqlalchemy import create_engine, text
 
-conn_params = {
-    "dbname": "tents",
-    "user": "postgres",
-    "password": "agtj8512",
-    "host": "localhost",
-    "port": "5433"
-}
+# Load .env
+load_dotenv()
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
 
 try:
-    conn = psycopg2.connect(**conn_params)
-    cur = conn.cursor()
-    
-    # テーブル一覧を取得
-    cur.execute("""
-        SELECT table_name 
-        FROM information_schema.tables 
-        WHERE table_schema = 'public'
-    """)
-    tables = cur.fetchall()
-    
-    print("--- Tables in tents database ---")
-    for table in tables:
-        table_name = table[0]
-        print(f"\nTable: {table_name}")
+    engine = create_engine(SQLALCHEMY_DATABASE_URL)
+    with engine.connect() as conn:
+        # テーブル一覧を取得
+        result = conn.execute(text("""
+            SELECT table_name 
+            FROM information_schema.tables 
+            WHERE table_schema = 'public'
+        """))
+        tables = result.fetchall()
         
-        # 各テーブルのカラム情報を取得
-        cur.execute(f"""
-            SELECT column_name, data_type, is_nullable
-            FROM information_schema.columns
-            WHERE table_name = '{table_name}'
-            ORDER BY ordinal_position
-        """)
-        columns = cur.fetchall()
-        for col in columns:
-            print(f"  - {col[0]}: {col[1]} (Nullable: {col[2]})")
+        print("--- Tables in Supabase database ---")
+        for table in tables:
+            table_name = table[0]
+            print(f"\nTable: {table_name}")
+            
+            # 各テーブルのカラム情報を取得
+            col_result = conn.execute(text(f"""
+                SELECT column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_name = '{table_name}'
+                ORDER BY ordinal_position
+            """))
+            columns = col_result.fetchall()
+            for col in columns:
+                print(f"  - {col[0]}: {col[1]} (Nullable: {col[2]})")
 
-    cur.close()
-    conn.close()
 except Exception as e:
     print(f"Error: {e}")
+
