@@ -17,15 +17,10 @@ def test_model(name):
         return False
 
 print("--- FACT CHECK: QUOTA STATUS ---")
-flash_ok = test_model("models/gemini-3-flash-preview")
-pro_ok = test_model("models/gemini-3.1-pro-preview")
+flash_ok = test_model("models/gemini-3.1-flash-lite-preview")
 print("--------------------------------")
 
-if flash_ok and pro_ok:
-    print("BOTH models are available.")
-elif flash_ok:
-    print("FLASH is AVAILABLE, PRO is potentially exhausted.")
-elif pro_ok:
-    print("PRO is AVAILABLE, FLASH is potentially exhausted.")
+if flash_ok:
+    print("models/gemini-3.1-flash-lite-preview is AVAILABLE.")
 else:
-    print("BOTH models seem to be unavailable or erroring.")
+    print("models/gemini-3.1-flash-lite-preview seems to be unavailable or erroring.")

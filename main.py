@@ -13,6 +13,14 @@ import schemas
 import httpx
 import database
 from typing import Dict, Any, List
+import time
+
+# Cache for Notion page list to reduce API calls and latency
+NOTION_PAGE_CACHE = {
+    "data": None,
+    "timestamp": 0
+}
+CACHE_TTL = 300  # 5 minutes
 
 # Load environment variables
 load_dotenv()
@@ -178,6 +186,30 @@ def add_tent(name: str, brand: str = None, price: float = None, capacity: float 
     print(f"[DEBUG] Tool: add_tent(name={name}) proposal")
     return f"[UI_ADD_PROPOSAL: {json.dumps(new_data)}]"
 
+def validate_ui_proposals(proposals: List[Dict[str, Any]]):
+    """
+    提案された変更内容が妥当か検証します。
+    proposals: [{"id": 1, "updates": {"price": 100}}] のような形式。
+    """
+    errors = []
+    numeric_fields = ['price', 'capacity', 'weight_kg', 'size_w', 'size_d', 'size_h', 'pack_w', 'pack_d', 'pack_h']
+    
+    for p in proposals:
+        tid = p.get("id")
+        updates = p.get("updates", {})
+        for field, value in updates.items():
+            if field in numeric_fields:
+                try:
+                    float(value)
+                except (ValueError, TypeError):
+                    errors.push(f"ID {tid}: {field} は数値である必要があります（現在の値: {value}）")
+            if field == 'name' and not str(value).strip():
+                errors.push(f"ID {tid}: 名前を空にすることはできません。")
+    
+    if errors:
+        return f"検証エラーが発生しました:\n" + "\n".join(errors)
+    return "検証OK: 全てのデータが妥当です。書き込みが可能です。"
+
 
 
 # --- Notion API Tools via Direct HTTP (httpx) ---
@@ -205,6 +237,12 @@ def list_notion_tents() -> Any:
     
     print(f"[DEBUG] Notion Sync: Fetching all children of {BONNOU_TENT_PARENT_ID}")
     
+    # Check cache
+    now = time.time()
+    if NOTION_PAGE_CACHE["data"] is not None and (now - NOTION_PAGE_CACHE["timestamp"]) < CACHE_TTL:
+        print(f"[DEBUG] Notion Sync: Returning cached data ({len(NOTION_PAGE_CACHE['data'])} items)")
+        return NOTION_PAGE_CACHE["data"]
+
     try:
         with httpx.Client() as client:
             while has_more:
@@ -233,6 +271,11 @@ def list_notion_tents() -> Any:
                 print(f"[DEBUG] Notion Sync: Fetched {len(results)} items, cumulative output count: {len(output)}")
                 
             print(f"[DEBUG] Notion Sync: Finished fetching all {len(output)} tent pages.")
+            
+            # Update cache
+            NOTION_PAGE_CACHE["data"] = output
+            NOTION_PAGE_CACHE["timestamp"] = time.time()
+            
             return output if output else "煩悩テントの下に子ページが見つかりませんでした。"
     except Exception as e:
         print(f"[ERROR] Notion Sync Exception: {str(e)}")
@@ -406,7 +449,7 @@ model = genai.GenerativeModel(
         list_tents, search_tents, get_tent_by_id, get_tent_stats, 
         update_tent_fields, bulk_update_tents, delete_tent_by_id, add_tent,
         list_notion_tents, get_notion_tent_detail, add_notion_tent_to_db,
-        sync_all_from_notion
+        sync_all_from_notion, validate_ui_proposals
     ]
 )
 
@@ -415,28 +458,61 @@ model = genai.GenerativeModel(
 @app.post("/api/chat")
 async def chat_with_agent(
     message: str = Body(..., embed=True),
-    session_id: str = Body("default", embed=True)
+    session_id: str = Body("default", embed=True),
+    history: List[Dict[str, Any]] = Body([], embed=True)
 ):
     system_message = (
-        "あなたはテントDB管理エージェントです。\n"
-        "【重要：絶対順守のルール】\n"
-        "- ユーザーから「〇〇だけ出して」「〇〇のみ更新して」と指示された場合、指定された項目（例：購入日だけ）以外は絶対に updates に含めないでください。他の情報（サイズや価格など）を勝手に推測して出力することは固く禁じます。\n"
-        "- 多数のデータを Notion から取得・反映する場合は必ず sync_all_from_notion ツールを使って一度に全件を処理してください。\n"
-        "- 手入力と同様に、まず画面上のセルの値を書き換え（提案）、ユーザーが確認・[書込]を行うまでDBには保存しません。"
+        "あなたは優秀なテントDB管理エージェントです。\n"
+        "Notion上の非構造化データ（平文）から情報を読み取り、SupabaseのDBを補完する役割を担います。\n"
+        "\n"
+        "【基本動作ルール】\n"
+        "1. **個別指示の尊重**: ユーザーから「〇〇の項目だけ入力して」と指示された場合、Notionのテキストに他の情報があっても、無視して指定された項目のみを提案してください。\n"
+        "2. **Notionの読み解き**: Notionには「購入日 2024/01/01」のような直接的な記述のほか、「去年の夏に買った」などの曖昧な記述もあります。これらを文脈から判断し、可能な限り正確な値を導き出してください。\n"
+        "3. **UI提案（ドラフト形式）**: 変更は必ず `update_tent_fields` などのツールを使い、画面上への反映（赤字表示）として提案してください。直接DBを書き換えることはしません。\n"
+        "4. **根拠の提示**: データを抽出した際は「Notionの本文に〇〇という記述があったため、購入日を××と判断しました」と根拠を添えてください。\n"
+        "5. **勝手な一括同期の禁止**: ユーザーが明示的に求めていない限り、全件の自動同期は行わないでください。"
     )
 
-    print(f"[DEBUG] Chat request from session {session_id}: {message}")
+    print(f"[DEBUG] Chat request from session {session_id}, history length: {len(history)}")
     try:
-        # 履歴を一切持たない完全な新規セッション（ステートレス）を開始
+        # 履歴を構築
+        formatted_history = []
+        if not history:
+            formatted_history.append({"role": "user", "parts": [system_message]})
+            formatted_history.append({"role": "model", "parts": ["了解しました。DBの整理と最適な提案を自由に行います。"]})
+        else:
+            # フロントエンドから送られてきた履歴を使用
+            for h in history:
+                formatted_history.append({"role": h["role"], "parts": [h["content"]]})
+
         chat = model.start_chat(
-            history=[
-                {"role": "user", "parts": [system_message]}, 
-                {"role": "model", "parts": ["了解しました。指示された項目のみに絞り、完璧に画面上への更新提案（[UI_PROPOSAL]）を行います。"]}
-            ],
+            history=formatted_history,
             enable_automatic_function_calling=True
         )
         
-        response = chat.send_message(message)
+        # Retry logic for transient AI API errors (500, 503)
+        max_retries = 3
+        retry_delay = 2 # seconds
+        response = None
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                response = chat.send_message(message)
+                break # Success
+            except Exception as e:
+                last_error = e
+                # Check for 500 or 503 internal errors
+                error_str = str(e).lower()
+                if "500" in error_str or "503" in error_str or "internal" in error_str:
+                    print(f"[WARNING] AI API transient error (attempt {attempt+1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(retry_delay)
+                        continue
+                raise e # Persistent or non-retryable error
+        
+        if not response:
+            raise last_error
         
         # Collect response text
         full_response_text = response.text
