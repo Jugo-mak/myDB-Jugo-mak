@@ -618,8 +618,15 @@ async def chat_with_agent(
 # Existing CRUD Endpoints
 @app.get("/tents", response_model=List[schemas.Tent])
 def read_tents(skip: int = 0, db: Session = Depends(database.get_db)):
-    tents = db.query(models.Tent).offset(skip).all()
-    return tents
+    try:
+        print(f"[DEBUG] Fetching tents from database. URL: {database.SQLALCHEMY_DATABASE_URL}")
+        tents = db.query(models.Tent).offset(skip).all()
+        print(f"[DEBUG] Found {len(tents)} tents.")
+        return tents
+    except Exception as e:
+        print(f"[ERROR] Failed to fetch tents: {e}")
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/tents/stats", response_model=schemas.TentAggregates)
 def get_stats_endpoint(db: Session = Depends(database.get_db)):

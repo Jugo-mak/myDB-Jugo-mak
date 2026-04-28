@@ -1,0 +1,12 @@
+[DEBUG] Fetching tents from database. URL: postgresql://postgres.vnoreueqgajdfhlghpmh:8547mmt5222@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres
+[DEBUG] Found 113 tents.
+INFO:     127.0.0.1:53648 - "GET /tents HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60814 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60814 - "GET /style.css HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55294 - "GET /app.js?v=3 HTTP/1.1" 200 OK
+[DEBUG] Fetching tents from database. URL: postgresql://postgres.vnoreueqgajdfhlghpmh:8547mmt5222@aws-1-ap-southeast-1.pooler.supabase.com:6543/postgres
+[DEBUG] Tool: get_tent_stats()
+[DEBUG] Found 113 tents.
+INFO:     127.0.0.1:55294 - "GET /tents HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55294 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60814 - "GET /tents/stats HTTP/1.1" 200 OK
