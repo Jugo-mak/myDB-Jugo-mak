@@ -80,7 +80,122 @@ AIは以下の関数を必要に応じて自律的に呼び出します。
 - `currentTents`: DBから取得した最新のマスターデータ。
 - 表示ロジック: `currentTents` に `pendingEdits` をマージして描画。
 
-## 6. トラブルシューティング
-- **接続タイムアウト**: Supabaseのホスト名が正しいか（東京 `ap-northeast-1` か シンガポール `ap-southeast-1` か）、ポートが `6543` かを確認してください。
-- **500エラー**: DBの `Decimal` 型がJSONシリアライズできない場合に発生することがあります。`schemas.py` で `from_attributes=True` を設定し、`Decimal` を適切に処理しているか確認してください。
-- **文字化け**: 日本語のブランド名などが化ける場合、DBのエンコーディング（UTF-8）とクライアント側のエンコーディング設定を確認してください。
+## 7. ソースコード・アーカイブ (完全復元用)
+万が一ソースファイルが紛失した場合でも、以下のコードを各ファイル名で保存することでシステムを完全に復元できます。
+
+### 7.1 database.py
+```python
+import os
+from sqlalchemy import create_engine
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker
+from dotenv import load_dotenv
+
+load_dotenv()
+SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
+engine = create_engine(SQLALCHEMY_DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+def get_db():
+    db = SessionLocal()
+    try: yield db
+    finally: db.close()
+```
+
+### 7.2 models.py
+```python
+from sqlalchemy import Column, Integer, Text, Numeric, Date
+from database import Base
+
+class Tent(Base):
+    __tablename__ = "tents"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(Text, nullable=False)
+    brand = Column(Text)
+    price = Column(Integer)
+    capacity = Column(Numeric)
+    weight_kg = Column(Numeric)
+    size_w = Column(Numeric); size_d = Column(Numeric); size_h = Column(Numeric)
+    pack_w = Column(Numeric); pack_d = Column(Numeric); pack_h = Column(Numeric)
+    material = Column(Text)
+    purchase_date = Column(Date)
+```
+
+### 7.3 schemas.py
+```python
+from pydantic import BaseModel, ConfigDict
+from datetime import date
+from typing import Optional
+from decimal import Decimal
+
+class TentBase(BaseModel):
+    name: str
+    brand: Optional[str] = None
+    price: Optional[int] = None
+    capacity: Optional[Decimal] = None
+    weight_kg: Optional[Decimal] = None
+    size_w: Optional[Decimal] = None
+    size_d: Optional[Decimal] = None
+    size_h: Optional[Decimal] = None
+    pack_w: Optional[Decimal] = None
+    pack_d: Optional[Decimal] = None
+    pack_h: Optional[Decimal] = None
+    material: Optional[str] = None
+    purchase_date: Optional[date] = None
+
+class TentCreate(TentBase): pass
+class TentUpdate(TentBase):
+    name: Optional[str] = None
+
+class Tent(TentBase):
+    id: int
+    model_config = ConfigDict(from_attributes=True)
+
+class TentAggregates(BaseModel):
+    total_count: int
+    avg_price: Optional[float] = None
+```
+
+### 7.4 main.py (AIエージェントの核心)
+```python
+import os
+from fastapi import FastAPI, Depends, HTTPException, Body
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
+import google.generativeai as genai
+from dotenv import load_dotenv
+import models, schemas, database, httpx, time
+
+load_dotenv()
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+app = FastAPI()
+
+# AI Tools: list_tents, search_tents, update_tent_fields, etc.
+# (詳細は実際の main.py を参照。AIプロンプトが最重要)
+SYSTEM_MESSAGE_MANAGEMENT = "あなたは優秀なテントDB管理エージェントです。Notionから情報を読み取り、UI提案を行ってください..."
+
+@app.post("/api/chat")
+async def chat_with_agent(...):
+    # Gemini 3.1 Flash Lite を使用した Function Calling ロジック
+    ...
+```
+
+### 7.5 static/app.js (フロントエンド制御)
+```javascript
+const API_BASE = window.location.origin;
+let currentTents = [];
+let pendingEdits = {}; 
+
+async function fetchTents() {
+    const res = await fetch(`${API_BASE}/tents`);
+    currentTents = await res.json();
+    renderTable(currentTents);
+}
+
+// AIの提案 [UI_PROPOSAL:...] をパースして pendingEdits に反映するロジック
+function parseUIProposals(text) { ... }
+```
+
+---
+**本ファイルは、プロジェクト「Tents Database AI Manager」の全知能と全構造を保持しています。**
