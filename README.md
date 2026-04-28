@@ -1,60 +1,86 @@
-# Tents Database AI Manager - 設計・構築仕様書
+# Tents Database AI Manager - 統合設計・構築仕様書
 
-本ドキュメントは、プロジェクトをゼロから完全に再現・リカバリするための設計仕様書です。Antigravityを含むAIアシスタントがスクラッチでシステムを構築することを想定しています。
+本ドキュメントは、プロジェクトをゼロから完全に再現・リカバリするための設計仕様書です。AIアシスタントがスクラッチでシステムを構築、あるいは既存環境を完全に復旧させるためのすべての情報を網羅しています。
 
-## 1. システムアーキテクチャ
+## 1. プロジェクト概要
+キャンプ用テントの在庫・スペックを管理するためのインテリジェント・ダッシュボードです。
+Google Gemini AIが「管理エージェント」として常駐し、Notion上の非構造化データ（メモ書き等）からスペックを抽出し、データベースを自動更新する提案を行います。
+
+## 2. システムアーキテクチャ
 - **Backend**: FastAPI (Python 3.12+)
 - **Frontend**: Vanilla HTML5 / CSS3 / JavaScript (ES6+)
-- **Database**: PostgreSQL 16 (Port: 5433)
-- **AI Engine**: Google Gemini 3.1 Flash Lite Preview
+- **Database**: Supabase PostgreSQL (Port: 6543 / Session Pooler)
+- **AI Engine**: Google Gemini 3.1 Flash (Google GenAI SDK)
+- **External Integration**: Notion API (httpxによる直接連携)
 
-## 2. データベース・スキーマ
-### 2.1 接続設定
-- **URL**: `postgresql://postgres:agtj8512@localhost:5433/tents`
+## 3. 主要機能
+### 3.1 AI 管理エージェント (Dual Mode)
+- **管理モード (Management)**: Notionからのデータ抽出、DB項目の修正提案、整合性チェックに特化。
+- **相談モード (Assistant)**: キャンプ知識の提供、Google検索を活用した最新トレンドの調査、コーディネート提案。
+- **UI提案システム**: AIはDBを直接書き換えません。`[UI_PROPOSAL: ...]` などの特殊タグを介してフロントエンドに「修正案」を送り、ユーザーが画面上で確認・編集した後に一括保存するワークフローを採用。
 
-### 2.2 テーブル定義 (`tents`)
+### 3.2 Notion 同期
+- 「煩悩テント」親ページの下にある子ページをスキャンし、本文（非構造化テキスト）から「購入日」や「スペック」をAIが自動抽出します。
+
+### 3.3 リアルタイム・エディタ
+- DBから取得したデータをテーブル表示し、直接編集が可能。
+- AIの提案やユーザーの手入力による変更は「未保存（赤字）」として管理され、`Validate` -> `Commit` の手順でDBへ反映。
+
+## 4. 環境構築・セットアップ
+
+### 4.1 前提条件
+- Python 3.12 以上
+- Supabase プロジェクト（PostgreSQL）
+- Notion インテグレーション（トークン発行済み）
+- Google Gemini API Key
+
+### 4.2 環境変数 (.env)
+セキュリティのため、具体的な接続情報やパスワードの記述は省略します。
+プロジェクトの動作には、以下のキーを設定した `.env` ファイルをプロジェクトルートに配置する必要があります。
+- `GEMINI_API_KEY`
+- `NOTION_TOKEN`
+- `NOTION_DATABASE_ID`
+- `DATABASE_URL`
+
+### 4.3 インストールと起動
+```powershell
+# 依存関係のインストール
+pip install fastapi uvicorn sqlalchemy psycopg2-binary python-dotenv google-generativeai httpx nest-asyncio
+
+# サーバー起動
+uvicorn main:app --reload --port 8000
+```
+
+## 5. 詳細仕様
+
+### 5.1 データベース・スキーマ (`tents`)
 | カラム名 | 型 | 説明 |
 | :--- | :--- | :--- |
 | `id` | Integer | Primary Key (Serial) |
 | `name` | Text | テント名 (Not Null) |
 | `brand` | Text | ブランド名 |
 | `price` | Integer | 価格 (JPY) |
-| `capacity` | **Numeric** | 定員 (小数点1桁対応, e.g., 2.5) |
-| `weight_kg` | Numeric | 重量 (kg) |
+| `capacity` | Numeric | 定員 (e.g., 2.5) |
+| `weight_kg` | Numeric | 重量 |
 | `size_w/d/h` | Numeric | 使用時サイズ (cm) |
 | `pack_w/d/h` | Numeric | 収納サイズ (cm) |
 | `material` | Text | 素材 |
 | `purchase_date` | Date | 購入日 |
 
-## 3. バックエンド実装の核心
-### 3.1 Pydantic スキーマ
-`Numeric` 型のカラムは、Pydantic (`schemas.py`) において `Decimal` 型として定義し、シリアライズエラーを防止しています。
+### 5.2 AIツールの定義 (Function Calling)
+AIは以下の関数を必要に応じて自律的に呼び出します。
+- `list_tents` / `search_tents`: DB内の検索。
+- `update_tent_fields`: 1件の修正案作成。
+- `bulk_update_tents`: 複数件の一括修正案。
+- `sync_all_from_notion`: 指定したIDのNotion情報を一括同期。
+- `list_notion_tents`: Notion側のページ一覧を取得。
 
-### 3.2 AIエージェント構成
-- **モデル**: `models/gemini-3.1-flash-lite-preview`
-- **機能**: `Function Calling` (工具呼び出し) をサポート。
-- **主要ツール**:
-    - `update_tent_fields`: 編集提案（UI上の赤字化）を行う。
-    - `list_tents` / `search_tents`: DB検索。
-    - `get_tent_stats`: リアルタイム集計。
+### 5.3 フロントエンド・ステート
+- `pendingEdits`: 保存前の変更内容を保持するJSONオブジェクト。キーはテントID。
+- `currentTents`: DBから取得した最新のマスターデータ。
+- 表示ロジック: `currentTents` に `pendingEdits` をマージして描画。
 
-## 4. フロントエンド・ロジック
-### 4.1 画面レイアウト
-- **構成**: Flexboxによる2カラム構成（テーブル領域 2 : AIチャット領域 1）。
-- **保護**: `min-width: 0` を各コンテナに適用し、コンテンツの肥大化によるレイアウト崩れ（Overlap）を防止。
-
-### 4.2 編集・保存ワークフロー
-- **Pending Edits**: 編集内容は `pendingEdits` オブジェクトに保持され、DBには即時反映されません（赤字で表示）。
-- **検証 (Validate)**: 変更内容のリストを表示。
-- **書込 (Write)**: `batch` アップデートとして一括でDBへ保存（トランザクション処理）。
-- **Enterキー挙動**: `contenteditable` セル内での Enter は `preventDefault()` で改行を抑制し、`blur()` で入力を確定させます。
-
-### 4.3 数値表示
-- `Capacity` などの数値は `parseFloat().toFixed(1)` を用いて小数点1桁で統一します。
-- `Price` は `toLocaleString()` でカンマ区切り表示。
-
-## 5. リカバリ・ステップ
-1. **DB構築**: PostgreSQLを起動し、上記スキーマでテーブルを作成。
-2. **環境変数**: `.env` に `GEMINI_API_KEY` を設定。
-3. **サーバー起動**: `uvicorn main:app --port 8002 --reload`
-4. **アクセス**: ブラウザで `http://localhost:8002/` を開く。
+## 6. トラブルシューティング
+- **接続タイムアウト**: Supabaseのホスト名が正しいか（東京 `ap-northeast-1` か シンガポール `ap-southeast-1` か）、ポートが `6543` かを確認してください。
+- **500エラー**: DBの `Decimal` 型がJSONシリアライズできない場合に発生することがあります。`schemas.py` で `from_attributes=True` を設定し、`Decimal` を適切に処理しているか確認してください。
+- **文字化け**: 日本語のブランド名などが化ける場合、DBのエンコーディング（UTF-8）とクライアント側のエンコーディング設定を確認してください。
